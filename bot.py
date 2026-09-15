@@ -8,10 +8,9 @@ import os
 from keep_alive import keep_alive
 
 # ================= কনফিগারেশন =================
-# এখানে আপনার মেইন বটের টোকেন এবং আপনার (Admin) ইউজারনেম দিন
 MAIN_BOT_TOKEN = "8500215028:AAG8NNnRgccMe1p1NhQq96SpBF5Hd69x7ko" 
-OWNER_USERNAME = "t.me/Premium_buy_admin" # (যেমন: @Programmer)
-ADMIN_ID = 8701368956 # আপনার টেলিগ্রাম ইউজার আইডি দিন (সংখ্যায়)
+OWNER_USERNAME = "Premium_buy_admin"
+ADMIN_ID = 8701368956 
 
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
 
@@ -43,40 +42,41 @@ REACTION_BOTS_DATA = [
 DB_FILE = 'database.json'
 def load_data():
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r') as f: return json.load(f)
+        try:
+            with open(DB_FILE, 'r') as f: return json.load(f)
+        except: pass
     return {"users": [], "fsub_channels": [], "video_link": "https://youtube.com", 
-            "links": {"channel": "https://t.me/yourchannel", "chat": "https://t.me/yourgroup", "owner": f"https://t.me/{OWNER_USERNAME.replace('@','')}", "youtube": "https://youtube.com"}}
+            "links": {"channel": "https://t.me/yourchannel", "chat": "https://t.me/yourgroup", "owner": f"https://t.me/{OWNER_USERNAME}", "youtube": "https://youtube.com"}}
 
 def save_data(data):
     with open(DB_FILE, 'w') as f: json.dump(data, f)
 
 db = load_data()
 
-# ================= রিয়েকশন লজিক (১-৫ সেকেন্ড পর পর) =================
+# ================= রিয়েকশন লজিক =================
 react_clients = [telebot.TeleBot(bot['token']) for bot in REACTION_BOTS_DATA]
 processed_messages = set()
 
 def perform_reactions(chat_id, message_id):
     emojis = ['❤️', '🥰', '😍', '😘', '👍']
     for client in react_clients:
-        time.sleep(random.uniform(1.0, 5.0)) # ১ থেকে ৫ সেকেন্ড গ্যাপ
+        time.sleep(random.uniform(1.0, 5.0)) # ১-৫ সেকেন্ড গ্যাপ
         try:
             client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(random.choice(emojis))], is_big=False)
-        except:
-            pass # গ্রুপে এড না থাকলে ইগনোর করবে
+        except Exception as e:
+            pass 
 
-# যেকোনো একটি বটকে মেসেজ লিসেনার হিসেবে সেট করা হলো, মেসেজ এলে টাস্ক শুরু হবে
-@react_clients[0].message_handler(func=lambda m: True)
-@react_clients[0].channel_post_handler(func=lambda m: True)
+# গ্রুপ বা চ্যানেলে মেসেজ এলে এই ফাংশন ট্রিগার হবে
+@main_bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'])
+@main_bot.channel_post_handler(func=lambda m: True)
 def listen_and_trigger(message):
     msg_id = f"{message.chat.id}_{message.message_id}"
     if msg_id not in processed_messages:
         processed_messages.add(msg_id)
-        if len(processed_messages) > 5000: processed_messages.clear()
+        if len(processed_messages) > 1000: processed_messages.clear()
         threading.Thread(target=perform_reactions, args=(message.chat.id, message.message_id)).start()
 
-# ================= মেইন বট লজিক =================
-
+# ================= মেইন বট লজিক (PM) =================
 def check_fsub(user_id):
     if not db["fsub_channels"]: return True, []
     not_joined = []
@@ -89,6 +89,7 @@ def check_fsub(user_id):
 
 @main_bot.message_handler(commands=['start'])
 def start_cmd(message):
+    if message.chat.type != 'private': return
     user_id = message.from_user.id
     if user_id not in db["users"]:
         db["users"].append(user_id)
@@ -107,7 +108,7 @@ def start_cmd(message):
 
 def send_welcome(chat_id, name, user_id):
     bot_info = main_bot.get_me()
-    text = f"""Hey {name} 😻\n\n😘 Welcome, I am @{bot_info.username}\n━━━━━━━━•❅•°•❈•°•❅•━━━━━━━━\n😊 Add me and all my team bots to your channel or group And Make Admin, then I will automatically react to all posts and messages in your channel or group\n\n🤖 Coder: {OWNER_USERNAME}"""
+    text = f"Hey {name} 😻\n\n😘 Welcome, I am @{bot_info.username}\n━━━━━━━━•❅•°•❈•°•❅•━━━━━━━━\n😊 Add me and all my team bots to your channel or group And Make Admin, then I will automatically react to all posts and messages in your channel or group\n\n🤖 Coder: @{OWNER_USERNAME}"
     
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -117,7 +118,6 @@ def send_welcome(chat_id, name, user_id):
         InlineKeyboardButton("📞 Support", callback_data="support")
     )
     
-    # প্রোফাইল পিকচার আনার চেষ্টা
     try:
         photos = main_bot.get_user_profile_photos(user_id, limit=1)
         if photos.total_count > 0:
@@ -152,12 +152,19 @@ def callback_query(call):
         markup.add(*buttons)
         markup.add(InlineKeyboardButton("🔙 Back", callback_data="back_home"))
         
-        main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup) if call.message.photo else main_bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        if call.message.content_type == 'photo':
+            main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        else:
+            main_bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
 
     elif call.data == "how_use":
-        text = f"❓HOW TO USE❓\n1. Add the Bot to Your Channel or Group:\n- Add the reaction bot to your Telegram channel or group.\n- Grant admin privileges to ensure it operates smoothly.\n2. Enable Reactions:\n- Ensure that the following emojis are enabled: ❤️, 🥰, 😍, 😘, 👍\n3. Automated Reaction Process:\n- The bot will automatically apply one of these emojis to each message.\n4. Support and Assistance:\n- Contact the bot developer {OWNER_USERNAME}"
+        text = f"❓HOW TO USE❓\n1. Add the Bot to Your Channel or Group:\n- Add the reaction bot to your Telegram channel or group.\n- Grant admin privileges to ensure it operates smoothly.\n2. Enable Reactions:\n- Ensure that the following emojis are enabled: ❤️, 🥰, 😍, 😘, 👍\n3. Automated Reaction Process:\n- The bot will automatically apply one of these emojis to each message.\n4. Support and Assistance:\n- Contact the bot developer @{OWNER_USERNAME}"
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("📹 Watch Video Tutorial", url=db["video_link"]), InlineKeyboardButton("🔙 Back", callback_data="back_home"))
-        main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup) if call.message.photo else main_bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        
+        if call.message.content_type == 'photo':
+            main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        else:
+            main_bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
 
     elif call.data == "support":
         text = "📞Support :\nFollow Our All Channel To Get All Notice And Update\n\nIf You Face Any Problem, Contact The Owner Directly -"
@@ -169,7 +176,10 @@ def callback_query(call):
             InlineKeyboardButton("YouTube Channel", url=db["links"]["youtube"]),
             InlineKeyboardButton("🔙 Back", callback_data="back_home")
         )
-        main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup) if call.message.photo else main_bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        if call.message.content_type == 'photo':
+            main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        else:
+            main_bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
 
     elif call.data == "back_home":
         main_bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -179,7 +189,7 @@ def callback_query(call):
 @main_bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id == ADMIN_ID:
-        text = "👑 **Admin Panel**\n\nCommands:\n/addfsub @channel_username (Max 6)\n/delfsub @channel_username\n/setvideo [Link]\n/broadcast [Message]\n/stats"
+        text = "👑 **Admin Panel**\n\nCommands:\n/addfsub @channel_username\n/delfsub @channel_username\n/setvideo [Link]\n/broadcast [Message]\n/stats"
         main_bot.reply_to(message, text, parse_mode="Markdown")
 
 @main_bot.message_handler(commands=['addfsub', 'delfsub', 'stats', 'setvideo', 'broadcast'])
@@ -187,7 +197,7 @@ def admin_commands(message):
     if message.from_user.id != ADMIN_ID: return
     cmd = message.text.split()[0]
     
-    if cmd == '/addfsub':
+    if cmd == '/addfsub' and len(message.text.split()) > 1:
         ch = message.text.split()[1]
         if len(db["fsub_channels"]) < 6:
             db["fsub_channels"].append(ch)
@@ -195,7 +205,7 @@ def admin_commands(message):
             main_bot.reply_to(message, f"Added {ch} to FSub.")
         else: main_bot.reply_to(message, "Maximum 6 channels allowed!")
         
-    elif cmd == '/delfsub':
+    elif cmd == '/delfsub' and len(message.text.split()) > 1:
         ch = message.text.split()[1]
         if ch in db["fsub_channels"]:
             db["fsub_channels"].remove(ch)
@@ -205,12 +215,12 @@ def admin_commands(message):
     elif cmd == '/stats':
         main_bot.reply_to(message, f"📊 Total Users: {len(db['users'])}")
         
-    elif cmd == '/setvideo':
+    elif cmd == '/setvideo' and len(message.text.split()) > 1:
         db["video_link"] = message.text.split()[1]
         save_data(db)
         main_bot.reply_to(message, "Video link updated!")
         
-    elif cmd == '/broadcast':
+    elif cmd == '/broadcast' and len(message.text.split()) > 1:
         msg = message.text.replace('/broadcast ', '')
         sent = 0
         for uid in db["users"]:
@@ -223,12 +233,5 @@ def admin_commands(message):
 # ================= বট রান করানো =================
 keep_alive() # Server alive for Render
 
-def run_reaction_bot(client):
-    client.polling(none_stop=True, skip_pending=True)
-
-print("Starting bots...")
-# রিয়েকশন লিসেনার (১ম বট) থ্রেডে রান করানো
-threading.Thread(target=run_reaction_bot, args=(react_clients[0],)).start()
-
-# মেইন বট রান করানো
-main_bot.polling(none_stop=True)
+print("Bot is successfully running...")
+main_bot.infinity_polling(timeout=10, long_polling_timeout=5)
