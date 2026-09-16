@@ -1,8 +1,9 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 import time
 import random
 import threading
+import queue
 import json
 import os
 from keep_alive import keep_alive
@@ -37,7 +38,10 @@ REACTION_BOTS_DATA = [
 ]
 
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
-react_clients = [telebot.TeleBot(bot['token']) for bot in REACTION_BOTS_DATA]
+
+# প্রতিটি বটের ইউজারনেম এবং ক্লায়েন্ট একসাথে স্টোর করা হলো যাতে কে ফেইল করছে তা লগে দেখা যায়
+react_clients = [{"client": telebot.TeleBot(bot['token']), "user": bot['user']} for bot in REACTION_BOTS_DATA]
+
 ALL_CONTENT_TYPES = ['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker', 'video_note', 'location', 'contact']
 
 # ================= DATABASE & CACHE =================
@@ -107,14 +111,14 @@ auto_fix_db()
 admin_states = {}
 
 def log_activity(msg):
-    db["logs"].insert(0, f"[{time.strftime('%Y-%m-%d %H:%M')}] {msg}")
-    if len(db["logs"]) > 50: db["logs"] = db["logs"][:50]
+    db["logs"].insert(0, f"[{time.strftime('%H:%M')}] {msg}")
+    if len(db["logs"]) > 20: db["logs"] = db["logs"][:20]
     save_data(db)
 
 def is_admin(user_id):
     return user_id in db["admins"] or user_id == OWNER_ID
 
-# ================= ADVANCED FAST REACTION ENGINE =================
+# ================= ADVANCED FAST REACTION ENGINE WITH EXACT ERROR LOGGING =================
 processed_messages = set()
 
 def process_reactions(chat_id, message_id):
@@ -125,17 +129,28 @@ def process_reactions(chat_id, message_id):
     bots_to_use = list(react_clients)
     if db["settings"]["random_order"]: random.shuffle(bots_to_use)
     
-    for client in bots_to_use:
+    for bot_obj in bots_to_use:
         if db["settings"]["emergency_stop"]: break
         time.sleep(random.uniform(min_d, max_d))
+        
+        client = bot_obj["client"]
+        bot_uname = bot_obj["user"]
+        
         try:
-            client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(random.choice(emojis))], is_big=False)
+            chosen_emoji = random.choice(emojis)
+            client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(chosen_emoji)], is_big=False)
             db["stats"]["success"] += 1
         except telebot.apihelper.ApiTelegramException as e:
-            if "Too Many Requests" in str(e): time.sleep(5)
+            if "Too Many Requests" in str(e): 
+                time.sleep(5)
+            # একদম নিখুঁত এরর ধরার কোড
+            error_desc = e.result_json.get('description', str(e)) if hasattr(e, 'result_json') else str(e)
+            log_activity(f"❌ {bot_uname}: {error_desc}")
             db["stats"]["failed"] += 1
         except Exception as ex:
+            log_activity(f"❌ {bot_uname}: {str(ex)}")
             db["stats"]["failed"] += 1
+            
         db["stats"]["total_reacs"] += 1
     save_data(db)
 
@@ -409,8 +424,8 @@ def callback_handler(call):
 
     elif d == "a_logs":
         if not is_admin(uid): return
-        logs = "\n".join(db["logs"][:15]) if db["logs"] else "No logs."
-        update_ui(call, f"📋 **𝗦𝘆𝘀𝘁𝗲𝗺 𝗟𝗼𝗴𝘀**\n━━━━━━━━━━━━━━━━━━━━\n`{logs}`", InlineKeyboardMarkup().add(InlineKeyboardButton("🧹 Clear Logs", callback_data="clear_logs"), InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")))
+        logs = "\n".join(db["logs"][:20]) if db["logs"] else "No logs."
+        update_ui(call, f"📋 **𝗦𝘆𝘀𝘁𝗲𝗺 𝗟𝗼𝗴𝘀 (Exact Errors)**\n━━━━━━━━━━━━━━━━━━━━\n`{logs}`", InlineKeyboardMarkup().add(InlineKeyboardButton("🧹 Clear Logs", callback_data="clear_logs"), InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")))
         
     elif d == "clear_logs":
         db["logs"] = []; save_data(db); main_bot.answer_callback_query(call.id, "Logs Cleared!"); callback_handler(telebot.types.CallbackQuery(call.id, call.from_user, "open_admin", call.chat_instance, call.message))
