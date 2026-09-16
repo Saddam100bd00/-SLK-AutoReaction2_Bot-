@@ -86,7 +86,6 @@ def save_data(data):
 
 db = load_data()
 
-# অটোমেটিক ডাটাবেস এরর ফিক্স (ভুল লিংক রিমুভ ও সঠিক ২টা ফিক্সড করা)
 def auto_fix_db():
     existing_ids = [ch["id"] for ch in db["fsub_channels"] if isinstance(ch, dict)]
     
@@ -185,7 +184,6 @@ def send_fsub_message(chat_id, missing_channels):
     text = "⚠️ **Security Check!**\nTo use this Premium Bot, you must join our official channels below:"
     main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# এখানে প্রোফাইল ছবিসহ ওয়েলকাম মেসেজ সেন্ড করার কোড যুক্ত করা হলো
 def send_welcome(chat_id, name, user_id):
     bot_info = main_bot.get_me()
     text = db["texts"]["welcome"].replace("{name}", name).replace("{bot_username}", bot_info.username)
@@ -204,7 +202,6 @@ def send_welcome(chat_id, name, user_id):
         markup.add(InlineKeyboardButton("👑 PREMIUM ADMIN PANEL", callback_data="open_admin"))
         
     try:
-        # ইউজারের প্রোফাইল পিকচার আনার চেষ্টা
         photos = main_bot.get_user_profile_photos(user_id, limit=1)
         if photos.total_count > 0:
             photo_id = photos.photos[0][0].file_id
@@ -482,4 +479,67 @@ def handle_admin_input(message):
                 else:
                     return main_bot.send_message(uid, "❌ Maximum 6 Channels allowed!")
             except Exception as e:
-                return main_bot.send_message(uid, f"❌ **Error:** Cannot add this channel. Make sure the bot is
+                return main_bot.send_message(uid, f"❌ **Error:** Cannot add this channel. Make sure the bot is an **Admin** in the channel!\n`{e}`", parse_mode="Markdown")
+
+        elif state == "delfsub":
+            found = False
+            for ch in list(db["fsub_channels"]):
+                if ch["id"] == text or ch["title"].lower() == text.lower() or text in ch["link"]:
+                    db["fsub_channels"].remove(ch)
+                    found = True
+                    main_bot.send_message(uid, f"✅ Removed {ch['title']} from FSub.")
+            if not found: main_bot.send_message(uid, "❌ Channel not found in list.")
+            
+        elif state == "ban":
+            ban_id = int(text)
+            if ban_id not in db["banned_users"]: db["banned_users"].append(ban_id)
+            main_bot.send_message(uid, f"✅ Banned {ban_id}.")
+            
+        elif state == "unban":
+            ban_id = int(text)
+            if ban_id in db["banned_users"]: db["banned_users"].remove(ban_id)
+            main_bot.send_message(uid, f"✅ Unbanned {ban_id}.")
+            
+        elif state == "welcome":
+            db["texts"]["welcome"] = text; main_bot.send_message(uid, "✅ Welcome text updated!")
+        elif state == "howtouse":
+            db["texts"]["how_to_use"] = text; main_bot.send_message(uid, "✅ How To Use updated!")
+        elif state == "support":
+            db["texts"]["support"] = text; main_bot.send_message(uid, "✅ Support text updated!")
+        elif state == "emojis":
+            db["settings"]["emojis"] = text.split(','); main_bot.send_message(uid, "✅ Emojis updated!")
+        elif state == "chlink":
+            db["links"]["channel"] = text; main_bot.send_message(uid, "✅ Channel Link updated!")
+        elif state == "chatlink":
+            db["links"]["chat"] = text; main_bot.send_message(uid, "✅ Chat Link updated!")
+        elif state == "ytlink":
+            db["links"]["youtube"] = text; main_bot.send_message(uid, "✅ YouTube Link updated!")
+        elif state == "videolink":
+            db["links"]["tutorial"] = text; main_bot.send_message(uid, "✅ Tutorial Video Link updated!")
+        elif state == "delay":
+            min_d, max_d = map(float, text.split())
+            db["settings"]["min_delay"], db["settings"]["max_delay"] = min_d, max_d
+            main_bot.send_message(uid, "✅ Delay updated!")
+            
+        elif state == "broadcast":
+            main_bot.send_message(uid, "⏳ Broadcasting started...")
+            sent, failed = 0, 0
+            for user in list(db["users"].keys()):
+                try:
+                    main_bot.copy_message(user, message.chat.id, message.message_id)
+                    sent += 1
+                except: failed += 1
+            main_bot.send_message(uid, f"✅ Broadcast Done!\nSuccess: {sent}\nFailed: {failed}")
+
+        save_data(db)
+        log_activity(f"Admin {uid} updated {state}")
+    except Exception as e:
+        main_bot.send_message(uid, f"❌ Error processing input.\nMake sure you sent the correct format.")
+    
+    admin_states[uid] = None
+
+# ================= RUN SERVER =================
+if __name__ == "__main__":
+    keep_alive()
+    print("🚀 Premium Mega Bot is Running...")
+    main_bot.infinity_polling(timeout=20, long_polling_timeout=10)
