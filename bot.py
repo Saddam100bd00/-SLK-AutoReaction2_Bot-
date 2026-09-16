@@ -9,7 +9,6 @@ import os
 from keep_alive import keep_alive
 
 # ================= কনফিগারেশন =================
-# এখানে BotFather থেকে পাওয়া আপনার একদম নতুন টোকেনটি দিবেন
 MAIN_BOT_TOKEN = "8500215028:AAGi3CUatThSfpfBW1fbyJN80T99fTmc7KE" 
 OWNER_ID = 8701368956
 OWNER_USERNAME = "Premium_buy_admin"
@@ -40,7 +39,7 @@ REACTION_BOTS_DATA = [
 
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
 
-# 409 Conflict Fix: মেইন বট এবং সাব-বট একই হলে ডুপ্লিকেট সেশন তৈরি করবে না 
+# 409 Conflict Fix
 react_clients = []
 for bot in REACTION_BOTS_DATA:
     if bot['token'] == MAIN_BOT_TOKEN:
@@ -284,7 +283,7 @@ def admin_dashboard_menu():
     )
     return m
 
-# ================= CALLBACK HANDLERS (SMOOTH UI) =================
+# ================= CALLBACK HANDLERS =================
 @main_bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     uid = call.from_user.id
@@ -304,11 +303,16 @@ def callback_handler(call):
         t = "Channel" if d == "u_ch_react" else "Group"
         param = "startchannel=start" if d == "u_ch_react" else "startgroup=start"
         text = f"🤖 **{t} 𝗥𝗲𝗮𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁𝘀**\n━━━━━━━━━━━━━━━━━━━━\n✅ Add all bots to your {t} and make them Admin 🔰\n\n"
+        
         markup = InlineKeyboardMarkup(row_width=4)
         buttons = []
-        for i, b in enumerate(REACTION_BOTS_DATA, 1):
-            text += f"**{i}.** @{b['user']}\n"
-            buttons.append(InlineKeyboardButton(f"➕ Add({i})", url=f"https://t.me/{b['user']}?{param}"))
+        # ১ থেকে ২০ পর্যন্ত সিরিয়াল জেনারেট করার লজিক
+        for i in range(1, 21):
+            num_suffix = "" if i == 1 else str(i)
+            bot_username = f"slk_autoreaction{num_suffix}_Bot"
+            text += f"{i}. {bot_username}\n"
+            buttons.append(InlineKeyboardButton(f"➕ Add({i})", url=f"https://t.me/{bot_username}?{param}"))
+            
         markup.add(*buttons)
         markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="home"))
         update_ui(call, text, markup)
