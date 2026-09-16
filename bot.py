@@ -218,7 +218,9 @@ def get_user_menu(user_id):
 
 def get_welcome_text(user):
     bot_info = main_bot.get_me()
-    return db["texts"]["welcome"].replace("{name}", user.first_name).replace("{bot_username}", bot_info.username).replace("{owner}", OWNER_USERNAME)
+    safe_bot_name = bot_info.username.replace("_", "\\_")
+    safe_owner = OWNER_USERNAME.replace("_", "\\_")
+    return db["texts"]["welcome"].replace("{name}", user.first_name).replace("{bot_username}", safe_bot_name).replace("{owner}", safe_owner)
 
 def update_ui(call, text, markup):
     try:
@@ -229,7 +231,10 @@ def update_ui(call, text, markup):
     except: pass
 
 def send_welcome(chat_id, name, user_id):
-    text = db["texts"]["welcome"].replace("{name}", name).replace("{bot_username}", main_bot.get_me().username).replace("{owner}", OWNER_USERNAME)
+    bot_info = main_bot.get_me()
+    safe_bot_name = bot_info.username.replace("_", "\\_")
+    safe_owner = OWNER_USERNAME.replace("_", "\\_")
+    text = db["texts"]["welcome"].replace("{name}", name).replace("{bot_username}", safe_bot_name).replace("{owner}", safe_owner)
     markup = get_user_menu(user_id)
     try:
         photos = main_bot.get_user_profile_photos(user_id, limit=1)
@@ -283,7 +288,7 @@ def admin_dashboard_menu():
     )
     return m
 
-# ================= CALLBACK HANDLERS =================
+# ================= CALLBACK HANDLERS (SMOOTH UI) =================
 @main_bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     uid = call.from_user.id
@@ -303,14 +308,15 @@ def callback_handler(call):
         t = "Channel" if d == "u_ch_react" else "Group"
         param = "startchannel=start" if d == "u_ch_react" else "startgroup=start"
         text = f"🤖 **{t} 𝗥𝗲𝗮𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁𝘀**\n━━━━━━━━━━━━━━━━━━━━\n✅ Add all bots to your {t} and make them Admin 🔰\n\n"
-        
         markup = InlineKeyboardMarkup(row_width=4)
         buttons = []
-        # ১ থেকে ২০ পর্যন্ত সিরিয়াল জেনারেট করার লজিক
+        
+        # ১ থেকে ২০ পর্যন্ত সিরিয়াল জেনারেট করার লজিক (উইথআউট আন্ডারস্কোর বাগ)
         for i in range(1, 21):
             num_suffix = "" if i == 1 else str(i)
             bot_username = f"slk_autoreaction{num_suffix}_Bot"
-            text += f"{i}. {bot_username}\n"
+            safe_username = bot_username.replace('_', '\\_') # আন্ডারস্কোর যেন ইটালিক না হয়ে যায়
+            text += f"**{i}.** [@{safe_username}](https://t.me/{bot_username})\n"
             buttons.append(InlineKeyboardButton(f"➕ Add({i})", url=f"https://t.me/{bot_username}?{param}"))
             
         markup.add(*buttons)
@@ -331,7 +337,8 @@ def callback_handler(call):
 
     elif d == "u_about":
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Menu", callback_data="home"))
-        update_ui(call, db["texts"]["about"].replace("{owner}", OWNER_USERNAME), markup)
+        safe_owner = OWNER_USERNAME.replace("_", "\\_")
+        update_ui(call, db["texts"]["about"].replace("{owner}", safe_owner), markup)
 
     elif d == "home":
         update_ui(call, get_welcome_text(call.from_user), get_user_menu(uid))
@@ -363,7 +370,7 @@ def callback_handler(call):
 
     elif d == "a_fsub":
         if not is_admin(uid): return
-        ch_list = "\n".join([c["title"] for c in db["fsub_channels"]]) if db["fsub_channels"] else "None"
+        ch_list = "\n".join([c["title"].replace("_", "\\_") for c in db["fsub_channels"]]) if db["fsub_channels"] else "None"
         text = f"🔐 **𝗙𝗼𝗿𝗰𝗲 𝗦𝘂𝗯𝘀𝗰𝗿𝗶𝗯𝗲 𝗠𝗮𝗻𝗮𝗴𝗲𝗿**\n━━━━━━━━━━━━━━━━━━━━\nActive Channels:\n**{ch_list}**\n\n*(Maximum 6 allowed)*"
         m = InlineKeyboardMarkup().add(
             InlineKeyboardButton("➕ Add Channel", callback_data="inp_addfsub"),
@@ -548,7 +555,6 @@ def handle_admin_input(message):
 
 # ================= RUN SERVER =================
 if __name__ == "__main__":
-    # পুরোনো ওয়েবহুক মুছে ফেলা হলো যাতে 409 Conflict না হয়
     main_bot.remove_webhook()
     time.sleep(2)
     keep_alive()
