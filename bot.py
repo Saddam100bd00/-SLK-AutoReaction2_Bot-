@@ -1,5 +1,5 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import time
 import random
 import threading
@@ -13,7 +13,7 @@ MAIN_BOT_TOKEN = "8500215028:AAG8NNnRgccMe1p1NhQq96SpBF5Hd69x7ko"
 OWNER_ID = 8701368956
 OWNER_USERNAME = "Premium_buy_admin"
 
-# আপনার দেওয়া ২০টি বটের ডাটা
+# ২০টি বটের ডাটা
 REACTION_BOTS_DATA = [
     {"user": "slk_autoreaction_Bot", "token": "8500215028:AAG8NNnRgccMe1p1NhQq96SpBF5Hd69x7ko"},
     {"user": "slk_autoreaction2_Bot", "token": "8959375749:AAHb8TQNGvk17xS4TMxv7LM1g_d8a2XnYek"},
@@ -40,8 +40,10 @@ REACTION_BOTS_DATA = [
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
 react_clients = [telebot.TeleBot(bot['token']) for bot in REACTION_BOTS_DATA]
 
-# ================= DATABASE MANAGER =================
+# ================= DATABASE & CACHE =================
 DB_FILE = 'database.json'
+chat_cache = {}  # সুন্দর ডিজাইনের জন্য চ্যানেল/গ্রুপের নাম সেভ রাখবে
+
 def load_data():
     default_db = {
         "users": {}, "banned_users": [], "admins": [OWNER_ID], "fsub_channels": [],
@@ -57,7 +59,7 @@ def load_data():
         },
         "settings": {
             "maintenance": False, "emergency_stop": False, "reaction_enabled": True,
-            "min_delay": 1.0, "max_delay": 3.0, "random_order": True, "sequential": True,
+            "min_delay": 1.0, "max_delay": 3.0, "random_order": True,
             "emojis": ['❤️', '🥰', '😍', '😘', '👍', '🔥', '🎉']
         },
         "stats": {"total_reacs": 0, "success": 0, "failed": 0, "messages_processed": 0},
@@ -80,7 +82,7 @@ def save_data(data):
     with open(DB_FILE, 'w') as f: json.dump(data, f)
 
 db = load_data()
-admin_states = {} # Tracks what admin is currently inputting
+admin_states = {}
 
 def log_activity(msg):
     db["logs"].insert(0, f"[{time.strftime('%Y-%m-%d %H:%M')}] {msg}")
@@ -90,7 +92,7 @@ def log_activity(msg):
 def is_admin(user_id):
     return user_id in db["admins"] or user_id == OWNER_ID
 
-# ================= SMART QUEUE REACTION ENGINE =================
+# ================= REACTION ENGINE =================
 reaction_queue = queue.Queue()
 processed_messages = set()
 
@@ -105,7 +107,6 @@ def reaction_worker():
 
         emojis = db["settings"]["emojis"]
         min_d, max_d = db["settings"]["min_delay"], db["settings"]["max_delay"]
-        
         bots_to_use = list(react_clients)
         if db["settings"]["random_order"]: random.shuffle(bots_to_use)
         
@@ -116,7 +117,7 @@ def reaction_worker():
                 client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(random.choice(emojis))], is_big=False)
                 db["stats"]["success"] += 1
             except telebot.apihelper.ApiTelegramException as e:
-                if "Too Many Requests" in str(e): time.sleep(5) # Safe Backoff
+                if "Too Many Requests" in str(e): time.sleep(5)
                 db["stats"]["failed"] += 1
             except Exception:
                 db["stats"]["failed"] += 1
@@ -138,21 +139,44 @@ def listen_and_trigger(message):
         db["stats"]["messages_processed"] += 1
         reaction_queue.put((message.chat.id, message.message_id))
 
-# ================= FSUB VERIFICATION =================
+# ================= FSUB LOGIC & UI (Fixed & Upgraded) =================
 def check_fsub(user_id):
     if not db["fsub_channels"]: return True, []
     not_joined = []
     for ch in db["fsub_channels"]:
         try:
             stat = main_bot.get_chat_member(ch, user_id).status
-            if stat not in ['member', 'administrator', 'creator', 'restricted']:
+            if stat in ['left', 'kicked']:
                 not_joined.append(ch)
-        except:
-            not_joined.append(ch) # API Error = Not Joined/Bot not Admin
+        except Exception as e:
+            not_joined.append(ch)
     return len(not_joined) == 0, not_joined
 
-# ================= UI & KEYBOARDS =================
-def user_main_menu(user_id):
+def get_chat_design(ch):
+    if ch in chat_cache: return chat_cache[ch]
+    try:
+        info = main_bot.get_chat(ch)
+        c_type = "Channel" if info.type == 'channel' else "Group"
+        chat_cache[ch] = (info.title, c_type)
+        return info.title, c_type
+    except:
+        return ch, "Channel/Group"
+
+def send_fsub_message(chat_id, missing_channels):
+    markup = InlineKeyboardMarkup(row_width=1)
+    for ch in missing_channels:
+        title, c_type = get_chat_design(ch)
+        icon = "📢" if c_type == "Channel" else "👥"
+        url = f"https://t.me/{ch.replace('@','')}"
+        markup.add(InlineKeyboardButton(f"{icon} Join {title} ({c_type})", url=url))
+        
+    markup.add(InlineKeyboardButton("✅ I Have Joined", callback_data="verify_fsub"))
+    main_bot.send_message(chat_id, "⚠️ **Security Check!**\nTo use this Premium Bot, you must join our official channels below:", reply_markup=markup, parse_mode="Markdown")
+
+def send_welcome(chat_id, name, user_id):
+    bot_info = main_bot.get_me()
+    text = db["texts"]["welcome"].replace("{name}", name).replace("{bot_username}", bot_info.username)
+    
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🤖 Channel React Bot", callback_data="u_ch_react"),
@@ -165,11 +189,33 @@ def user_main_menu(user_id):
     markup.add(InlineKeyboardButton("ℹ️ About", callback_data="u_about"))
     if is_admin(user_id):
         markup.add(InlineKeyboardButton("👑 PREMIUM ADMIN PANEL", callback_data="open_admin"))
-    return markup
+        
+    main_bot.send_message(chat_id, text, reply_markup=markup, disable_web_page_preview=True)
 
-def back_btn(target):
-    return InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data=target))
+# ================= USER HANDLERS =================
+@main_bot.message_handler(commands=['start'])
+def start_cmd(message):
+    if message.chat.type != 'private': return
+    uid = message.from_user.id
+    cid = message.chat.id
+    
+    if uid in db["banned_users"]: return
+    if db["settings"]["maintenance"] and not is_admin(uid):
+        return main_bot.send_message(cid, "🛠️ **Bot is under maintenance.**", parse_mode="Markdown")
 
+    if str(uid) not in db["users"]:
+        db["users"][str(uid)] = {"name": message.from_user.first_name, "date": time.strftime("%Y-%m-%d")}
+        save_data(db)
+        log_activity(f"New User: {uid}")
+
+    is_joined, missing = check_fsub(uid)
+    if not is_joined:
+        send_fsub_message(cid, missing)
+        return
+
+    send_welcome(cid, message.from_user.first_name, uid)
+
+# ================= ADMIN MENUS =================
 def admin_dashboard_menu():
     m = InlineKeyboardMarkup(row_width=2)
     m.add(
@@ -182,38 +228,11 @@ def admin_dashboard_menu():
         InlineKeyboardButton("🔗 Links", callback_data="a_links"),
         InlineKeyboardButton("📢 Broadcast", callback_data="a_brd"),
         InlineKeyboardButton("📋 Logs", callback_data="a_logs"),
-        InlineKeyboardButton("📡 Bot Health", callback_data="a_health"),
         InlineKeyboardButton("🔧 Maintenance", callback_data="a_maint"),
         InlineKeyboardButton("🚨 Emergency Stop", callback_data="a_estop"),
         InlineKeyboardButton("❌ Close", callback_data="close_ui")
     )
     return m
-
-# ================= USER HANDLERS =================
-@main_bot.message_handler(commands=['start'])
-def start_cmd(message):
-    if message.chat.type != 'private': return
-    uid = message.from_user.id
-    
-    if uid in db["banned_users"]: return
-    if db["settings"]["maintenance"] and not is_admin(uid):
-        return main_bot.send_message(uid, "🛠️ **Bot is under maintenance.**", parse_mode="Markdown")
-
-    if str(uid) not in db["users"]:
-        db["users"][str(uid)] = {"name": message.from_user.first_name, "date": time.strftime("%Y-%m-%d")}
-        save_data(db)
-        log_activity(f"New User: {uid}")
-
-    is_joined, missing = check_fsub(uid)
-    if not is_joined:
-        markup = InlineKeyboardMarkup(row_width=1)
-        for ch in missing: markup.add(InlineKeyboardButton(f"Join {ch}", url=f"https://t.me/{ch.replace('@','')}"))
-        markup.add(InlineKeyboardButton("✅ Verify", callback_data="verify_fsub"))
-        return main_bot.send_message(uid, "⚠️ **Please join our channels first:**", reply_markup=markup, parse_mode="Markdown")
-
-    bot_info = main_bot.get_me()
-    text = db["texts"]["welcome"].replace("{name}", message.from_user.first_name).replace("{bot_username}", bot_info.username)
-    main_bot.send_message(uid, text, reply_markup=user_main_menu(uid))
 
 # ================= CALLBACK HANDLERS =================
 @main_bot.callback_query_handler(func=lambda call: True)
@@ -223,14 +242,14 @@ def callback_handler(call):
     mid = call.message.message_id
     d = call.data
 
-    # --- User Callbacks ---
+    # --- User Callbacks (Fixed Verify) ---
     if d == "verify_fsub":
         is_joined, missing = check_fsub(uid)
         if is_joined:
             main_bot.delete_message(cid, mid)
-            start_cmd(call.message)
+            send_welcome(cid, call.from_user.first_name, uid)
         else:
-            main_bot.answer_callback_query(call.id, "❌ You haven't joined all channels!", show_alert=True)
+            main_bot.answer_callback_query(call.id, f"❌ You haven't joined {len(missing)} channels yet!", show_alert=True)
             
     elif d in ["u_ch_react", "u_gr_react"]:
         t = "Channel" if d == "u_ch_react" else "Group"
@@ -258,10 +277,12 @@ def callback_handler(call):
         main_bot.edit_message_text(db["texts"]["support"], cid, mid, reply_markup=markup)
 
     elif d == "u_about":
-        main_bot.edit_message_text(db["texts"]["about"].replace("{owner}", OWNER_USERNAME), cid, mid, reply_markup=back_btn("home"))
+        main_bot.edit_message_text(db["texts"]["about"].replace("{owner}", OWNER_USERNAME), cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="home")))
 
     elif d == "home":
-        main_bot.edit_message_text(db["texts"]["welcome"].replace("{name}", call.from_user.first_name).replace("{bot_username}", main_bot.get_me().username), cid, mid, reply_markup=user_main_menu(uid))
+        # Delete and resend to prevent edit errors with pictures
+        main_bot.delete_message(cid, mid)
+        send_welcome(cid, call.from_user.first_name, uid)
 
     # --- Admin Callbacks ---
     elif d == "open_admin":
@@ -271,9 +292,23 @@ def callback_handler(call):
         if not is_admin(uid): return
         st = db["stats"]
         text = f"📊 **System Dashboard**\n━━━━━━━━━━━━━━━━━━━━\n👥 Total Users: {len(db['users'])}\n🚫 Banned: {len(db['banned_users'])}\n\n✅ Reactions Success: {st['success']}\n❌ Reactions Failed: {st['failed']}\n📨 Processed Messages: {st['messages_processed']}\n\n🚨 Emergency Stop: {'ON 🔴' if db['settings']['emergency_stop'] else 'OFF 🟢'}\n🔧 Maintenance: {'ON 🔴' if db['settings']['maintenance'] else 'OFF 🟢'}"
-        main_bot.edit_message_text(text, cid, mid, reply_markup=back_btn("open_admin"), parse_mode="Markdown")
+        main_bot.edit_message_text(text, cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="open_admin")), parse_mode="Markdown")
 
-    # ---- NO COMMAND INPUT SYSTEM (Button -> Input -> Save) ----
+    elif d == "a_users":
+        if not is_admin(uid): return
+        text = f"👥 **User Management**\nTotal: {len(db['users'])}\nBanned: {len(db['banned_users'])}"
+        m = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("🚫 Ban User", callback_data="inp_ban"),
+            InlineKeyboardButton("✅ Unban User", callback_data="inp_unban"),
+            InlineKeyboardButton("🔙 Back", callback_data="open_admin")
+        )
+        main_bot.edit_message_text(text, cid, mid, reply_markup=m, parse_mode="Markdown")
+
+    elif d == "a_bots":
+        if not is_admin(uid): return
+        text = f"🤖 **Reaction Bots Status**\nTotal Configured: {len(REACTION_BOTS_DATA)}\nQueue Pending: {reaction_queue.qsize()}\n\nAll bots are linked to the main queue."
+        main_bot.edit_message_text(text, cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="open_admin")), parse_mode="Markdown")
+
     elif d == "a_fsub":
         if not is_admin(uid): return
         ch_list = "\n".join(db["fsub_channels"]) if db["fsub_channels"] else "None"
@@ -289,7 +324,7 @@ def callback_handler(call):
         if not is_admin(uid): return
         action = d.split("_")[1]
         admin_states[uid] = action
-        main_bot.send_message(cid, f"✏️ Please send the required text/value for: **{action.upper()}**\n*(Or send /cancel to abort)*", parse_mode="Markdown")
+        main_bot.send_message(cid, f"✏️ Please send the required value for: **{action.upper()}**\n*(Or send /cancel to abort)*", parse_mode="Markdown")
         main_bot.answer_callback_query(call.id)
 
     elif d == "a_react":
@@ -361,12 +396,12 @@ def callback_handler(call):
     elif d == "close_ui":
         main_bot.delete_message(cid, mid)
 
-# ================= SMART STATE HANDLER (No Commands Required) =================
+# ================= SMART STATE HANDLER =================
 @main_bot.message_handler(func=lambda m: m.from_user.id in admin_states and admin_states[m.from_user.id] is not None, content_types=['text', 'photo', 'video', 'document'])
 def handle_admin_input(message):
     uid = message.from_user.id
     state = admin_states[uid]
-    text = message.text
+    text = message.text if message.text else ""
 
     if text == "/cancel":
         admin_states[uid] = None
@@ -374,11 +409,21 @@ def handle_admin_input(message):
 
     try:
         if state == "addfsub":
-            db["fsub_channels"].append(text)
-            main_bot.send_message(uid, f"✅ Added {text} to FSub.")
+            if not text.startswith('@') and not text.startswith('-100'):
+                text = '@' + text.replace('https://t.me/', '').replace('t.me/', '')
+            if text not in db["fsub_channels"]: db["fsub_channels"].append(text)
+            main_bot.send_message(uid, f"✅ Added {text} to FSub.\n*(Make sure Bot is Admin there!)*")
         elif state == "delfsub":
             if text in db["fsub_channels"]: db["fsub_channels"].remove(text)
             main_bot.send_message(uid, f"✅ Removed {text}.")
+        elif state == "ban":
+            ban_id = int(text)
+            if ban_id not in db["banned_users"]: db["banned_users"].append(ban_id)
+            main_bot.send_message(uid, f"✅ Banned {ban_id}.")
+        elif state == "unban":
+            ban_id = int(text)
+            if ban_id in db["banned_users"]: db["banned_users"].remove(ban_id)
+            main_bot.send_message(uid, f"✅ Unbanned {ban_id}.")
         elif state == "welcome":
             db["texts"]["welcome"] = text
             main_bot.send_message(uid, "✅ Welcome text updated!")
@@ -392,17 +437,13 @@ def handle_admin_input(message):
             db["settings"]["emojis"] = text.split(',')
             main_bot.send_message(uid, "✅ Emojis updated!")
         elif state == "chlink":
-            db["links"]["channel"] = text
-            main_bot.send_message(uid, "✅ Channel Link updated!")
+            db["links"]["channel"] = text; main_bot.send_message(uid, "✅ Channel Link updated!")
         elif state == "chatlink":
-            db["links"]["chat"] = text
-            main_bot.send_message(uid, "✅ Chat Link updated!")
+            db["links"]["chat"] = text; main_bot.send_message(uid, "✅ Chat Link updated!")
         elif state == "ytlink":
-            db["links"]["youtube"] = text
-            main_bot.send_message(uid, "✅ YouTube Link updated!")
+            db["links"]["youtube"] = text; main_bot.send_message(uid, "✅ YouTube Link updated!")
         elif state == "videolink":
-            db["links"]["tutorial"] = text
-            main_bot.send_message(uid, "✅ Tutorial Video Link updated!")
+            db["links"]["tutorial"] = text; main_bot.send_message(uid, "✅ Tutorial Video Link updated!")
         elif state == "delay":
             min_d, max_d = map(float, text.split())
             db["settings"]["min_delay"], db["settings"]["max_delay"] = min_d, max_d
@@ -410,7 +451,7 @@ def handle_admin_input(message):
         elif state == "broadcast":
             main_bot.send_message(uid, "⏳ Broadcasting started...")
             sent, failed = 0, 0
-            for user in db["users"]:
+            for user in list(db["users"].keys()):
                 try:
                     main_bot.copy_message(user, message.chat.id, message.message_id)
                     sent += 1
@@ -420,9 +461,9 @@ def handle_admin_input(message):
         save_data(db)
         log_activity(f"Admin {uid} updated {state}")
     except Exception as e:
-        main_bot.send_message(uid, f"❌ Error: Invalid format.\n{e}")
+        main_bot.send_message(uid, f"❌ Error: Invalid input format.\n{e}")
     
-    admin_states[uid] = None # Clear state
+    admin_states[uid] = None
 
 # ================= RUN SERVER =================
 if __name__ == "__main__":
