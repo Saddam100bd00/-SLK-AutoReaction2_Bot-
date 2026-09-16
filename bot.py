@@ -9,7 +9,8 @@ import os
 from keep_alive import keep_alive
 
 # ================= কনফিগারেশন =================
-MAIN_BOT_TOKEN = "8500215028:AAG8NNnRgccMe1p1NhQq96SpBF5Hd69x7ko"
+# এখানে BotFather থেকে পাওয়া আপনার একদম নতুন টোকেনটি দিবেন
+MAIN_BOT_TOKEN = "8500215028:AAGi3CUatThSfpfBW1fbyJN80T99fTmc7KE" 
 OWNER_ID = 8701368956
 OWNER_USERNAME = "Premium_buy_admin"
 
@@ -39,8 +40,13 @@ REACTION_BOTS_DATA = [
 
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
 
-# প্রতিটি বটের ইউজারনেম এবং ক্লায়েন্ট একসাথে স্টোর করা হলো যাতে কে ফেইল করছে তা লগে দেখা যায়
-react_clients = [{"client": telebot.TeleBot(bot['token']), "user": bot['user']} for bot in REACTION_BOTS_DATA]
+# 409 Conflict Fix: মেইন বট এবং সাব-বট একই হলে ডুপ্লিকেট সেশন তৈরি করবে না 
+react_clients = []
+for bot in REACTION_BOTS_DATA:
+    if bot['token'] == MAIN_BOT_TOKEN:
+        react_clients.append({"client": main_bot, "user": bot['user']})
+    else:
+        react_clients.append({"client": telebot.TeleBot(bot['token']), "user": bot['user']})
 
 ALL_CONTENT_TYPES = ['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker', 'video_note', 'location', 'contact']
 
@@ -143,7 +149,6 @@ def process_reactions(chat_id, message_id):
         except telebot.apihelper.ApiTelegramException as e:
             if "Too Many Requests" in str(e): 
                 time.sleep(5)
-            # একদম নিখুঁত এরর ধরার কোড
             error_desc = e.result_json.get('description', str(e)) if hasattr(e, 'result_json') else str(e)
             log_activity(f"❌ {bot_uname}: {error_desc}")
             db["stats"]["failed"] += 1
@@ -162,10 +167,8 @@ def trigger_reactions(message):
         if len(processed_messages) > 5000: processed_messages.clear()
         db["stats"]["messages_processed"] += 1
         save_data(db)
-        # Dedicated thread for every message (Zero bottleneck)
         threading.Thread(target=process_reactions, args=(message.chat.id, message.message_id), daemon=True).start()
 
-# ছবি, ভিডিও, লিংক, ডকুমেন্ট সবকিছুর জন্যই রিয়েকশন ট্রিগার হবে
 @main_bot.channel_post_handler(content_types=ALL_CONTENT_TYPES)
 def handle_channel_post(message):
     trigger_reactions(message)
@@ -191,7 +194,6 @@ def check_fsub(user_id):
 def send_fsub_message(chat_id, missing_channels):
     markup = InlineKeyboardMarkup(row_width=1)
     for ch in missing_channels:
-        # User requested beautiful specific button names
         btn_text = "📢 Join Channel" if ch["type"] == "Channel" else "👥 Join Group"
         markup.add(InlineKeyboardButton(btn_text, url=ch['link']))
         
@@ -199,7 +201,7 @@ def send_fsub_message(chat_id, missing_channels):
     text = "🛑 **𝗦𝗘𝗖𝗨𝗥𝗜𝗧𝗬 𝗖𝗛𝗘𝗖𝗞!** 🛑\n━━━━━━━━━━━━━━━━━━━━\n⚠️ To use this Premium Bot, you **must join** our official channels below:"
     main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# ================= SMOOTH UI SYSTEM (No Message Deletion) =================
+# ================= SMOOTH UI SYSTEM =================
 def get_user_menu(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -220,7 +222,6 @@ def get_welcome_text(user):
     return db["texts"]["welcome"].replace("{name}", user.first_name).replace("{bot_username}", bot_info.username).replace("{owner}", OWNER_USERNAME)
 
 def update_ui(call, text, markup):
-    """Magic Function: Updates the message perfectly whether it's a photo or text without deleting it!"""
     try:
         if call.message.content_type == 'photo':
             main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
@@ -237,7 +238,6 @@ def send_welcome(chat_id, name, user_id):
             photo_id = photos.photos[0][0].file_id
             main_bot.send_photo(chat_id, photo=photo_id, caption=text, reply_markup=markup, parse_mode="Markdown")
         else:
-            # Default Premium Image if user has no profile photo
             main_bot.send_photo(chat_id, photo="https://i.imgur.com/7bQeXoF.png", caption=text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
         main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
@@ -290,7 +290,6 @@ def callback_handler(call):
     uid = call.from_user.id
     d = call.data
 
-    # --- User Callbacks ---
     if d == "verify_fsub":
         is_joined, missing = check_fsub(uid)
         if is_joined:
@@ -333,7 +332,6 @@ def callback_handler(call):
     elif d == "home":
         update_ui(call, get_welcome_text(call.from_user), get_user_menu(uid))
 
-    # --- Admin Callbacks ---
     elif d == "open_admin":
         if is_admin(uid): 
             update_ui(call, "👑 **𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗔𝗗𝗠𝗜𝗡 𝗗𝗔𝗦𝗛𝗕𝗢𝗔𝗥𝗗** 👑\n━━━━━━━━━━━━━━━━━━━━\nSelect an option below to manage your Mega Bot:", admin_dashboard_menu())
@@ -546,6 +544,9 @@ def handle_admin_input(message):
 
 # ================= RUN SERVER =================
 if __name__ == "__main__":
+    # পুরোনো ওয়েবহুক মুছে ফেলা হলো যাতে 409 Conflict না হয়
+    main_bot.remove_webhook()
+    time.sleep(2)
     keep_alive()
     print("🚀 Premium Mega Bot is Running...")
     main_bot.infinity_polling(timeout=20, long_polling_timeout=10)
