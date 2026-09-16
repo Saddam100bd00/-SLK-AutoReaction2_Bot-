@@ -3,7 +3,6 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import time
 import random
 import threading
-import queue
 import json
 import os
 from keep_alive import keep_alive
@@ -39,9 +38,11 @@ REACTION_BOTS_DATA = [
 
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
 react_clients = [telebot.TeleBot(bot['token']) for bot in REACTION_BOTS_DATA]
+ALL_CONTENT_TYPES = ['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker', 'video_note', 'location', 'contact']
 
-# ================= DATABASE MANAGER =================
+# ================= DATABASE & CACHE =================
 DB_FILE = 'database.json'
+db_lock = threading.Lock()
 
 def load_data():
     default_db = {
@@ -54,7 +55,7 @@ def load_data():
             "welcome": "✨ **𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗔𝘂𝘁𝗼 𝗥𝗲𝗮𝗰𝘁𝗶𝗼𝗻** ✨\n━━━━━━━━━━━━━━━━━━━━\n👋 Hey {name} 😻!\n🤖 I am @{bot_username}.\n\n😊 Add me and all my team bots to your Channel or Group, and make us **Admin**! We will automatically react to all your posts and messages.\n\n👨‍💻 **Developer:** @{owner}",
             "how_to_use": "❓ **𝗛𝗢𝗪 𝗧𝗢 𝗨𝗦𝗘** ❓\n━━━━━━━━━━━━━━━━━━━━\n1️⃣ **Add the Bots:** Add the main bot and all reaction bots to your Telegram Channel or Group.\n2️⃣ **Make Admins:** Grant admin privileges to ensure they operate smoothly.\n3️⃣ **Enable Reactions:** Go to your Group/Channel settings and ensure Emojis (❤️, 🥰, 😍, 👍, 🔥) are enabled.\n4️⃣ **Magic Happens:** The bots will automatically apply beautiful emojis to every new message! ✨",
             "support": "📞 **𝗦𝗨𝗣𝗣𝗢𝗥𝗧 & 𝗛𝗘𝗟𝗣** 📞\n━━━━━━━━━━━━━━━━━━━━\n🔔 Follow our official channels to get all notices and the latest updates!\n\n💡 If you face any issues or want to order a custom bot, contact the Owner directly from the buttons below.",
-            "about": "ℹ️ **𝗔𝗕𝗢𝗨𝗧 𝗧𝗛𝗜𝗦 𝗕𝗢𝗧** ℹ️\n━━━━━━━━━━━━━━━━━━━━\n🚀 **Premium Auto Reaction System v2.0**\n⚡ Powered by Advanced Queue & Delay Engine.\n\n👨‍💻 **Developed By:** @{owner}"
+            "about": "ℹ️ **𝗔𝗕𝗢𝗨𝗧 𝗧𝗛𝗜𝗦 𝗕𝗢𝗧** ℹ️\n━━━━━━━━━━━━━━━━━━━━\n🚀 **Premium Auto Reaction System v2.0**\n⚡ Powered by Advanced Threading & Multi-Reaction Engine.\n\n👨‍💻 **Developed By:** @{owner}"
         },
         "links": {
             "channel": "https://t.me/SLK_Official_Channel", "chat": "https://t.me/SLK_autoreaction_chat_group", 
@@ -82,7 +83,8 @@ def load_data():
     return default_db
 
 def save_data(data):
-    with open(DB_FILE, 'w') as f: json.dump(data, f)
+    with db_lock:
+        with open(DB_FILE, 'w') as f: json.dump(data, f)
 
 db = load_data()
 
@@ -112,56 +114,50 @@ def log_activity(msg):
 def is_admin(user_id):
     return user_id in db["admins"] or user_id == OWNER_ID
 
-# ================= QUEUE REACTION ENGINE =================
-reaction_queue = queue.Queue()
+# ================= ADVANCED FAST REACTION ENGINE =================
 processed_messages = set()
 
-def reaction_worker():
-    while True:
-        task = reaction_queue.get()
-        chat_id, message_id = task
-        
-        if db["settings"]["emergency_stop"] or not db["settings"]["reaction_enabled"]:
-            reaction_queue.task_done()
-            continue
+def process_reactions(chat_id, message_id):
+    if db["settings"]["emergency_stop"] or not db["settings"]["reaction_enabled"]: return
+    
+    emojis = db["settings"]["emojis"]
+    min_d, max_d = db["settings"]["min_delay"], db["settings"]["max_delay"]
+    bots_to_use = list(react_clients)
+    if db["settings"]["random_order"]: random.shuffle(bots_to_use)
+    
+    for client in bots_to_use:
+        if db["settings"]["emergency_stop"]: break
+        time.sleep(random.uniform(min_d, max_d))
+        try:
+            client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(random.choice(emojis))], is_big=False)
+            db["stats"]["success"] += 1
+        except telebot.apihelper.ApiTelegramException as e:
+            if "Too Many Requests" in str(e): time.sleep(5)
+            db["stats"]["failed"] += 1
+        except Exception as ex:
+            db["stats"]["failed"] += 1
+        db["stats"]["total_reacs"] += 1
+    save_data(db)
 
-        emojis = db["settings"]["emojis"]
-        min_d, max_d = db["settings"]["min_delay"], db["settings"]["max_delay"]
-        bots_to_use = list(react_clients)
-        if db["settings"]["random_order"]: random.shuffle(bots_to_use)
-        
-        for client in bots_to_use:
-            if db["settings"]["emergency_stop"]: break
-            time.sleep(random.uniform(min_d, max_d))
-            try:
-                client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(random.choice(emojis))], is_big=False)
-                db["stats"]["success"] += 1
-            except telebot.apihelper.ApiTelegramException as e:
-                # Add logging so admin knows why reaction failed
-                if "Too Many Requests" in str(e): 
-                    time.sleep(5)
-                log_activity(f"Reaction Error (API): {e}")
-                db["stats"]["failed"] += 1
-            except Exception as ex:
-                log_activity(f"Reaction Error: {ex}")
-                db["stats"]["failed"] += 1
-            db["stats"]["total_reacs"] += 1
-        
-        save_data(db)
-        reaction_queue.task_done()
-
-threading.Thread(target=reaction_worker, daemon=True).start()
-
-@main_bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'])
-@main_bot.channel_post_handler(func=lambda m: True)
-def listen_and_trigger(message):
+def trigger_reactions(message):
     if db["settings"]["emergency_stop"] or db["settings"]["maintenance"]: return
     msg_id = f"{message.chat.id}_{message.message_id}"
     if msg_id not in processed_messages:
         processed_messages.add(msg_id)
-        if len(processed_messages) > 3000: processed_messages.clear()
+        if len(processed_messages) > 5000: processed_messages.clear()
         db["stats"]["messages_processed"] += 1
-        reaction_queue.put((message.chat.id, message.message_id))
+        save_data(db)
+        # Dedicated thread for every message (Zero bottleneck)
+        threading.Thread(target=process_reactions, args=(message.chat.id, message.message_id), daemon=True).start()
+
+# ছবি, ভিডিও, লিংক, ডকুমেন্ট সবকিছুর জন্যই রিয়েকশন ট্রিগার হবে
+@main_bot.channel_post_handler(content_types=ALL_CONTENT_TYPES)
+def handle_channel_post(message):
+    trigger_reactions(message)
+
+@main_bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=ALL_CONTENT_TYPES)
+def handle_group_message(message):
+    trigger_reactions(message)
 
 # ================= FSUB (Force Join) LOGIC =================
 def check_fsub(user_id):
@@ -180,15 +176,15 @@ def check_fsub(user_id):
 def send_fsub_message(chat_id, missing_channels):
     markup = InlineKeyboardMarkup(row_width=1)
     for ch in missing_channels:
-        icon = "📢" if ch["type"] == "Channel" else "👥"
-        btn_text = f"{icon} Join Channel" if ch["type"] == "Channel" else f"{icon} Join Group"
+        # User requested beautiful specific button names
+        btn_text = "📢 Join Channel" if ch["type"] == "Channel" else "👥 Join Group"
         markup.add(InlineKeyboardButton(btn_text, url=ch['link']))
         
-    markup.add(InlineKeyboardButton("✅ I Have Joined", callback_data="verify_fsub"))
+    markup.add(InlineKeyboardButton("✅ Verify Join", callback_data="verify_fsub"))
     text = "🛑 **𝗦𝗘𝗖𝗨𝗥𝗜𝗧𝗬 𝗖𝗛𝗘𝗖𝗞!** 🛑\n━━━━━━━━━━━━━━━━━━━━\n⚠️ To use this Premium Bot, you **must join** our official channels below:"
     main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# ================= UI & MENUS (Premium Text-Based for Smooth UI) =================
+# ================= SMOOTH UI SYSTEM (No Message Deletion) =================
 def get_user_menu(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -208,7 +204,30 @@ def get_welcome_text(user):
     bot_info = main_bot.get_me()
     return db["texts"]["welcome"].replace("{name}", user.first_name).replace("{bot_username}", bot_info.username).replace("{owner}", OWNER_USERNAME)
 
-# ================= USER HANDLERS =================
+def update_ui(call, text, markup):
+    """Magic Function: Updates the message perfectly whether it's a photo or text without deleting it!"""
+    try:
+        if call.message.content_type == 'photo':
+            main_bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        else:
+            main_bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
+    except: pass
+
+def send_welcome(chat_id, name, user_id):
+    text = db["texts"]["welcome"].replace("{name}", name).replace("{bot_username}", main_bot.get_me().username).replace("{owner}", OWNER_USERNAME)
+    markup = get_user_menu(user_id)
+    try:
+        photos = main_bot.get_user_profile_photos(user_id, limit=1)
+        if photos.total_count > 0:
+            photo_id = photos.photos[0][0].file_id
+            main_bot.send_photo(chat_id, photo=photo_id, caption=text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            # Default Premium Image if user has no profile photo
+            main_bot.send_photo(chat_id, photo="https://i.imgur.com/7bQeXoF.png", caption=text, reply_markup=markup, parse_mode="Markdown")
+    except Exception as e:
+        main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
+
+# ================= START COMMAND =================
 @main_bot.message_handler(commands=['start'])
 def start_cmd(message):
     if message.chat.type != 'private': return
@@ -229,8 +248,7 @@ def start_cmd(message):
         send_fsub_message(cid, missing)
         return
 
-    # Text based for smooth editing
-    main_bot.send_message(cid, get_welcome_text(message.from_user), reply_markup=get_user_menu(uid), parse_mode="Markdown", disable_web_page_preview=True)
+    send_welcome(cid, message.from_user.first_name, uid)
 
 # ================= ADMIN MENUS =================
 def admin_dashboard_menu():
@@ -247,25 +265,24 @@ def admin_dashboard_menu():
         InlineKeyboardButton("📋 Logs", callback_data="a_logs"),
         InlineKeyboardButton("🔧 Maintenance", callback_data="a_maint"),
         InlineKeyboardButton("🚨 Emergency Stop", callback_data="a_estop"),
-        InlineKeyboardButton("❌ Close", callback_data="close_ui")
+        InlineKeyboardButton("🏠 Back Home", callback_data="home")
     )
     return m
 
-# ================= CALLBACK HANDLERS (SMOOTH EDITING) =================
+# ================= CALLBACK HANDLERS (SMOOTH UI) =================
 @main_bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     uid = call.from_user.id
-    cid = call.message.chat.id
-    mid = call.message.message_id
     d = call.data
 
     # --- User Callbacks ---
     if d == "verify_fsub":
         is_joined, missing = check_fsub(uid)
         if is_joined:
-            # Smooth Transition
-            main_bot.edit_message_text(get_welcome_text(call.from_user), cid, mid, reply_markup=get_user_menu(uid), parse_mode="Markdown", disable_web_page_preview=True)
-            main_bot.answer_callback_query(call.id, "✅ Successfully Verified!", show_alert=False)
+            try: main_bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            send_welcome(call.message.chat.id, call.from_user.first_name, uid)
+            main_bot.answer_callback_query(call.id, "✅ Verified Successfully!", show_alert=False)
         else:
             main_bot.answer_callback_query(call.id, f"❌ You haven't joined {len(missing)} channel(s) yet!", show_alert=True)
             
@@ -280,11 +297,11 @@ def callback_handler(call):
             buttons.append(InlineKeyboardButton(f"➕ Add({i})", url=f"https://t.me/{b['user']}?{param}"))
         markup.add(*buttons)
         markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="home"))
-        main_bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="Markdown")
+        update_ui(call, text, markup)
 
     elif d == "u_how":
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🎥 Watch Video Tutorial", url=db["links"]["tutorial"]), InlineKeyboardButton("🔙 Back to Menu", callback_data="home"))
-        main_bot.edit_message_text(db["texts"]["how_to_use"], cid, mid, reply_markup=markup, parse_mode="Markdown")
+        update_ui(call, db["texts"]["how_to_use"], markup)
 
     elif d == "u_support":
         markup = InlineKeyboardMarkup(row_width=2).add(
@@ -292,26 +309,25 @@ def callback_handler(call):
             InlineKeyboardButton("👤 Developer", url=db["links"]["owner"]), InlineKeyboardButton("▶️ YouTube", url=db["links"]["youtube"]),
             InlineKeyboardButton("🔙 Back to Menu", callback_data="home")
         )
-        main_bot.edit_message_text(db["texts"]["support"], cid, mid, reply_markup=markup, parse_mode="Markdown")
+        update_ui(call, db["texts"]["support"], markup)
 
     elif d == "u_about":
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Menu", callback_data="home"))
-        main_bot.edit_message_text(db["texts"]["about"].replace("{owner}", OWNER_USERNAME), cid, mid, reply_markup=markup, parse_mode="Markdown")
+        update_ui(call, db["texts"]["about"].replace("{owner}", OWNER_USERNAME), markup)
 
     elif d == "home":
-        # Smooth Back to Home
-        main_bot.edit_message_text(get_welcome_text(call.from_user), cid, mid, reply_markup=get_user_menu(uid), parse_mode="Markdown", disable_web_page_preview=True)
+        update_ui(call, get_welcome_text(call.from_user), get_user_menu(uid))
 
     # --- Admin Callbacks ---
     elif d == "open_admin":
         if is_admin(uid): 
-            main_bot.edit_message_text("👑 **𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗔𝗗𝗠𝗜𝗡 𝗗𝗔𝗦𝗛𝗕𝗢𝗔𝗥𝗗** 👑\n━━━━━━━━━━━━━━━━━━━━\nSelect an option below to manage your Mega Bot:", cid, mid, reply_markup=admin_dashboard_menu(), parse_mode="Markdown")
+            update_ui(call, "👑 **𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗔𝗗𝗠𝗜𝗡 𝗗𝗔𝗦𝗛𝗕𝗢𝗔𝗥𝗗** 👑\n━━━━━━━━━━━━━━━━━━━━\nSelect an option below to manage your Mega Bot:", admin_dashboard_menu())
         
     elif d == "a_dash":
         if not is_admin(uid): return
         st = db["stats"]
         text = f"📊 **𝗦𝘆𝘀𝘁𝗲𝗺 𝗗𝗮𝘀𝗵𝗯𝗼𝗮𝗿𝗱**\n━━━━━━━━━━━━━━━━━━━━\n👥 Total Users: {len(db['users'])}\n🚫 Banned: {len(db['banned_users'])}\n\n✅ Reactions Success: {st['success']}\n❌ Reactions Failed: {st['failed']}\n📨 Messages Processed: {st['messages_processed']}\n\n🚨 Emergency Stop: {'ON 🔴' if db['settings']['emergency_stop'] else 'OFF 🟢'}\n🔧 Maintenance: {'ON 🔴' if db['settings']['maintenance'] else 'OFF 🟢'}"
-        main_bot.edit_message_text(text, cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")), parse_mode="Markdown")
+        update_ui(call, text, InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")))
 
     elif d == "a_users":
         if not is_admin(uid): return
@@ -321,12 +337,12 @@ def callback_handler(call):
             InlineKeyboardButton("✅ Unban User", callback_data="inp_unban"),
             InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")
         )
-        main_bot.edit_message_text(text, cid, mid, reply_markup=m, parse_mode="Markdown")
+        update_ui(call, text, m)
 
     elif d == "a_bots":
         if not is_admin(uid): return
-        text = f"🤖 **𝗥𝗲𝗮𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁𝘀 𝗦𝘁𝗮𝘁𝘂𝘀**\n━━━━━━━━━━━━━━━━━━━━\nTotal Configured: {len(REACTION_BOTS_DATA)}\nQueue Pending: {reaction_queue.qsize()}\n\n✅ All bots are linked to the main queue and working smoothly."
-        main_bot.edit_message_text(text, cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")), parse_mode="Markdown")
+        text = f"🤖 **𝗥𝗲𝗮𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁𝘀 𝗦𝘁𝗮𝘁𝘂𝘀**\n━━━━━━━━━━━━━━━━━━━━\nTotal Configured: {len(REACTION_BOTS_DATA)}\n\n✅ All bots are fully active and utilizing the Multi-Threading Engine!"
+        update_ui(call, text, InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")))
 
     elif d == "a_fsub":
         if not is_admin(uid): return
@@ -337,7 +353,7 @@ def callback_handler(call):
             InlineKeyboardButton("🗑️ Remove Channel", callback_data="inp_delfsub"),
             InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")
         )
-        main_bot.edit_message_text(text, cid, mid, reply_markup=m, parse_mode="Markdown")
+        update_ui(call, text, m)
 
     elif d.startswith("inp_"):
         if not is_admin(uid): return
@@ -347,7 +363,7 @@ def callback_handler(call):
             msg = "➕ **Add Force Sub Channel**\n\nPlease **Forward a message** from your channel/group here. (Or send the public @username).\n\n*(Make sure the bot is an ADMIN in that channel first!)*\n\nType `/cancel` to abort."
         else:
             msg = f"✏️ Please send the required value for: **{action.upper()}**\n*(Or send /cancel to abort)*"
-        main_bot.send_message(cid, msg, parse_mode="Markdown")
+        main_bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
         main_bot.answer_callback_query(call.id)
 
     elif d == "a_react":
@@ -361,7 +377,7 @@ def callback_handler(call):
             InlineKeyboardButton("😀 Set Emojis", callback_data="inp_emojis"),
             InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")
         )
-        main_bot.edit_message_text(text, cid, mid, reply_markup=m, parse_mode="Markdown")
+        update_ui(call, text, m)
 
     elif d == "tog_order":
         db["settings"]["random_order"] = not db["settings"]["random_order"]
@@ -378,7 +394,7 @@ def callback_handler(call):
             InlineKeyboardButton("✏️ Support Text", callback_data="inp_support"),
             InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")
         )
-        main_bot.edit_message_text("🎨 **𝗧𝗲𝘅𝘁 & 𝗨𝗜 𝗠𝗮𝗻𝗮𝗴𝗲𝗿**\n━━━━━━━━━━━━━━━━━━━━\nSelect text to edit:", cid, mid, reply_markup=m, parse_mode="Markdown")
+        update_ui(call, "🎨 **𝗧𝗲𝘅𝘁 & 𝗨𝗜 𝗠𝗮𝗻𝗮𝗴𝗲𝗿**\n━━━━━━━━━━━━━━━━━━━━\nSelect text to edit:", m)
 
     elif d == "a_links":
         if not is_admin(uid): return
@@ -389,12 +405,12 @@ def callback_handler(call):
             InlineKeyboardButton("🎥 Tutorial Link", callback_data="inp_videolink"),
             InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")
         )
-        main_bot.edit_message_text("🔗 **𝗟𝗶𝗻𝗸𝘀 𝗠𝗮𝗻𝗮𝗴𝗲𝗿**\n━━━━━━━━━━━━━━━━━━━━\nSelect which link to edit:", cid, mid, reply_markup=m, parse_mode="Markdown")
+        update_ui(call, "🔗 **𝗟𝗶𝗻𝗸𝘀 𝗠𝗮𝗻𝗮𝗴𝗲𝗿**\n━━━━━━━━━━━━━━━━━━━━\nSelect which link to edit:", m)
 
     elif d == "a_logs":
         if not is_admin(uid): return
         logs = "\n".join(db["logs"][:15]) if db["logs"] else "No logs."
-        main_bot.edit_message_text(f"📋 **𝗦𝘆𝘀𝘁𝗲𝗺 𝗟𝗼𝗴𝘀**\n━━━━━━━━━━━━━━━━━━━━\n`{logs}`", cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🧹 Clear Logs", callback_data="clear_logs"), InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")), parse_mode="Markdown")
+        update_ui(call, f"📋 **𝗦𝘆𝘀𝘁𝗲𝗺 𝗟𝗼𝗴𝘀**\n━━━━━━━━━━━━━━━━━━━━\n`{logs}`", InlineKeyboardMarkup().add(InlineKeyboardButton("🧹 Clear Logs", callback_data="clear_logs"), InlineKeyboardButton("🔙 Back to Panel", callback_data="open_admin")))
         
     elif d == "clear_logs":
         db["logs"] = []; save_data(db); main_bot.answer_callback_query(call.id, "Logs Cleared!"); callback_handler(telebot.types.CallbackQuery(call.id, call.from_user, "open_admin", call.chat_instance, call.message))
@@ -414,13 +430,10 @@ def callback_handler(call):
     elif d == "a_brd":
         if not is_admin(uid): return
         admin_states[uid] = "broadcast"
-        main_bot.send_message(cid, "📢 **Broadcast Mode**\nSend the message you want to broadcast (Text/Photo/Video).\nType `/cancel` to abort.", parse_mode="Markdown")
-
-    elif d == "close_ui":
-        main_bot.delete_message(cid, mid)
+        main_bot.send_message(call.message.chat.id, "📢 **Broadcast Mode**\nSend the message you want to broadcast (Text/Photo/Video).\nType `/cancel` to abort.", parse_mode="Markdown")
 
 # ================= SMART STATE HANDLER =================
-@main_bot.message_handler(func=lambda m: m.from_user.id in admin_states and admin_states[m.from_user.id] is not None, content_types=['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation'])
+@main_bot.message_handler(func=lambda m: m.from_user.id in admin_states and admin_states[m.from_user.id] is not None, content_types=ALL_CONTENT_TYPES)
 def handle_admin_input(message):
     uid = message.from_user.id
     state = admin_states[uid]
@@ -428,7 +441,7 @@ def handle_admin_input(message):
 
     if text == "/cancel":
         admin_states[uid] = None
-        return main_bot.send_message(uid, "❌ Action Cancelled.", reply_markup=admin_dashboard_menu())
+        return main_bot.send_message(uid, "❌ Action Cancelled.")
 
     try:
         if state == "addfsub":
@@ -512,7 +525,7 @@ def handle_admin_input(message):
         save_data(db)
         log_activity(f"Admin {uid} updated {state}")
     except Exception as e:
-        main_bot.send_message(uid, f"❌ Error processing input.\nMake sure you sent the correct format.")
+        main_bot.send_message(uid, f"❌ Error processing input. Please check the format and try again.")
     
     admin_states[uid] = None
 
