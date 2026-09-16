@@ -1,5 +1,5 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 import time
 import random
 import threading
@@ -45,7 +45,11 @@ DB_FILE = 'database.json'
 
 def load_data():
     default_db = {
-        "users": {}, "banned_users": [], "admins": [OWNER_ID], "fsub_channels": [],
+        "users": {}, "banned_users": [], "admins": [OWNER_ID], 
+        "fsub_channels": [
+            {"id": "@SLK_Official_Channel", "title": "SLK Official Channel", "type": "Channel", "link": "https://t.me/SLK_Official_Channel"},
+            {"id": "@SLK_autoreaction_chat_group", "title": "SLK Auto Reaction Group", "type": "Group", "link": "https://t.me/SLK_autoreaction_chat_group"}
+        ],
         "texts": {
             "welcome": "Hey {name} 😻\n\n😘 Welcome, I am @{bot_username}\n━━━━━━━━━━━━━━━━━━━━\n😊 Add me and all my team bots to your channel or group And Make Admin.",
             "how_to_use": "❓ HOW TO USE ❓\n1. Add the Bot to Your Channel or Group.\n2. Make it Admin.",
@@ -53,7 +57,7 @@ def load_data():
             "about": "ℹ️ About this Bot\nPremium Auto Reaction System v2.0\nDeveloper: @{owner}"
         },
         "links": {
-            "channel": "https://t.me/yourchannel", "chat": "https://t.me/yourgroup", 
+            "channel": "https://t.me/SLK_Official_Channel", "chat": "https://t.me/SLK_autoreaction_chat_group", 
             "owner": f"https://t.me/{OWNER_USERNAME}", "youtube": "https://youtube.com", "tutorial": "https://youtube.com"
         },
         "settings": {
@@ -82,15 +86,20 @@ def save_data(data):
 
 db = load_data()
 
-# অটোমেটিক ডাটাবেস এরর ফিক্স (ভুল লিংক রিমুভ)
+# অটোমেটিক ডাটাবেস এরর ফিক্স (ভুল লিংক রিমুভ ও সঠিক ২টা ফিক্সড করা)
 def auto_fix_db():
+    existing_ids = [ch["id"] for ch in db["fsub_channels"] if isinstance(ch, dict)]
+    
+    if "@SLK_Official_Channel" not in existing_ids:
+        db["fsub_channels"].insert(0, {"id": "@SLK_Official_Channel", "title": "SLK Official Channel", "type": "Channel", "link": "https://t.me/SLK_Official_Channel"})
+    if "@SLK_autoreaction_chat_group" not in existing_ids:
+        db["fsub_channels"].append({"id": "@SLK_autoreaction_chat_group", "title": "SLK Auto Reaction Group", "type": "Group", "link": "https://t.me/SLK_autoreaction_chat_group"})
+
     valid_fsub = []
     for ch in db["fsub_channels"]:
-        if isinstance(ch, str):
-            if ch.startswith('@+'): continue # রিমুভ প্রাইভেট ইনভ্যালিড লিংক
-            valid_fsub.append({"id": ch, "title": ch, "type": "Channel", "link": f"https://t.me/{ch.replace('@','')}"})
-        else:
+        if isinstance(ch, dict) and not ch["id"].startswith('@+'):
             valid_fsub.append(ch)
+            
     db["fsub_channels"] = valid_fsub
     save_data(db)
 
@@ -170,12 +179,13 @@ def send_fsub_message(chat_id, missing_channels):
     markup = InlineKeyboardMarkup(row_width=1)
     for ch in missing_channels:
         icon = "📢" if ch["type"] == "Channel" else "👥"
-        markup.add(InlineKeyboardButton(f"{icon} Join {ch['title']} ({ch['type']})", url=ch['link']))
+        markup.add(InlineKeyboardButton(f"{icon} Join {ch['title']}", url=ch['link']))
         
     markup.add(InlineKeyboardButton("✅ I Have Joined", callback_data="verify_fsub"))
     text = "⚠️ **Security Check!**\nTo use this Premium Bot, you must join our official channels below:"
     main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
+# এখানে প্রোফাইল ছবিসহ ওয়েলকাম মেসেজ সেন্ড করার কোড যুক্ত করা হলো
 def send_welcome(chat_id, name, user_id):
     bot_info = main_bot.get_me()
     text = db["texts"]["welcome"].replace("{name}", name).replace("{bot_username}", bot_info.username)
@@ -193,7 +203,16 @@ def send_welcome(chat_id, name, user_id):
     if is_admin(user_id):
         markup.add(InlineKeyboardButton("👑 PREMIUM ADMIN PANEL", callback_data="open_admin"))
         
-    main_bot.send_message(chat_id, text, reply_markup=markup, disable_web_page_preview=True)
+    try:
+        # ইউজারের প্রোফাইল পিকচার আনার চেষ্টা
+        photos = main_bot.get_user_profile_photos(user_id, limit=1)
+        if photos.total_count > 0:
+            photo_id = photos.photos[0][0].file_id
+            main_bot.send_photo(chat_id, photo=photo_id, caption=text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
 
 # ================= USER HANDLERS =================
 @main_bot.message_handler(commands=['start'])
@@ -266,11 +285,17 @@ def callback_handler(call):
             buttons.append(InlineKeyboardButton(f"Add({i})", url=f"https://t.me/{b['user']}?{param}"))
         markup.add(*buttons)
         markup.add(InlineKeyboardButton("🔙 Back", callback_data="home"))
-        main_bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="Markdown")
+        try:
+            main_bot.delete_message(cid, mid)
+            main_bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
+        except: pass
 
     elif d == "u_how":
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🎥 Watch Video Tutorial", url=db["links"]["tutorial"]), InlineKeyboardButton("🔙 Back", callback_data="home"))
-        main_bot.edit_message_text(db["texts"]["how_to_use"], cid, mid, reply_markup=markup)
+        try:
+            main_bot.delete_message(cid, mid)
+            main_bot.send_message(cid, db["texts"]["how_to_use"], reply_markup=markup, parse_mode="Markdown")
+        except: pass
 
     elif d == "u_support":
         markup = InlineKeyboardMarkup(row_width=2).add(
@@ -278,10 +303,17 @@ def callback_handler(call):
             InlineKeyboardButton("👤 Owner", url=db["links"]["owner"]), InlineKeyboardButton("▶️ YouTube", url=db["links"]["youtube"]),
             InlineKeyboardButton("🔙 Back", callback_data="home")
         )
-        main_bot.edit_message_text(db["texts"]["support"], cid, mid, reply_markup=markup)
+        try:
+            main_bot.delete_message(cid, mid)
+            main_bot.send_message(cid, db["texts"]["support"], reply_markup=markup, parse_mode="Markdown")
+        except: pass
 
     elif d == "u_about":
-        main_bot.edit_message_text(db["texts"]["about"].replace("{owner}", OWNER_USERNAME), cid, mid, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="home")))
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="home"))
+        try:
+            main_bot.delete_message(cid, mid)
+            main_bot.send_message(cid, db["texts"]["about"].replace("{owner}", OWNER_USERNAME), reply_markup=markup, parse_mode="Markdown")
+        except: pass
 
     elif d == "home":
         try: main_bot.delete_message(cid, mid)
@@ -290,7 +322,10 @@ def callback_handler(call):
 
     # --- Admin Callbacks ---
     elif d == "open_admin":
-        if is_admin(uid): main_bot.edit_message_text("👑 **Premium Admin Dashboard**", cid, mid, reply_markup=admin_dashboard_menu(), parse_mode="Markdown")
+        if is_admin(uid): 
+            try: main_bot.delete_message(cid, mid)
+            except: pass
+            main_bot.send_message(cid, "👑 **Premium Admin Dashboard**", reply_markup=admin_dashboard_menu(), parse_mode="Markdown")
         
     elif d == "a_dash":
         if not is_admin(uid): return
@@ -430,7 +465,6 @@ def handle_admin_input(message):
                 chat_id = text if text.startswith('@') or text.startswith('-100') else f"@{text.replace('https://t.me/', '').replace('t.me/', '')}"
 
             try:
-                # Test if bot is admin
                 c_info = main_bot.get_chat(chat_id)
                 chat_title = c_info.title
                 c_type = "Channel" if c_info.type == 'channel' else "Group"
@@ -438,11 +472,9 @@ def handle_admin_input(message):
                 if c_info.username: invite_link = f"https://t.me/{c_info.username}"
                 else: invite_link = main_bot.export_chat_invite_link(chat_id)
                 
-                # Check admin power
                 main_bot.get_chat_member(chat_id, main_bot.get_me().id)
                 
                 new_ch = {"id": str(chat_id), "title": chat_title, "type": c_type, "link": invite_link}
-                # Remove duplicate
                 db["fsub_channels"] = [ch for ch in db["fsub_channels"] if ch["id"] != str(chat_id)]
                 if len(db["fsub_channels"]) < 6:
                     db["fsub_channels"].append(new_ch)
@@ -450,68 +482,4 @@ def handle_admin_input(message):
                 else:
                     return main_bot.send_message(uid, "❌ Maximum 6 Channels allowed!")
             except Exception as e:
-                return main_bot.send_message(uid, f"❌ **Error:** Cannot add this channel. Make sure the bot is an **Admin** in the channel!\n`{e}`", parse_mode="Markdown")
-
-        elif state == "delfsub":
-            # Admin will send Title or ID
-            found = False
-            for ch in list(db["fsub_channels"]):
-                if ch["id"] == text or ch["title"].lower() == text.lower() or text in ch["link"]:
-                    db["fsub_channels"].remove(ch)
-                    found = True
-                    main_bot.send_message(uid, f"✅ Removed {ch['title']} from FSub.")
-            if not found: main_bot.send_message(uid, "❌ Channel not found in list.")
-            
-        elif state == "ban":
-            ban_id = int(text)
-            if ban_id not in db["banned_users"]: db["banned_users"].append(ban_id)
-            main_bot.send_message(uid, f"✅ Banned {ban_id}.")
-            
-        elif state == "unban":
-            ban_id = int(text)
-            if ban_id in db["banned_users"]: db["banned_users"].remove(ban_id)
-            main_bot.send_message(uid, f"✅ Unbanned {ban_id}.")
-            
-        elif state == "welcome":
-            db["texts"]["welcome"] = text; main_bot.send_message(uid, "✅ Welcome text updated!")
-        elif state == "howtouse":
-            db["texts"]["how_to_use"] = text; main_bot.send_message(uid, "✅ How To Use updated!")
-        elif state == "support":
-            db["texts"]["support"] = text; main_bot.send_message(uid, "✅ Support text updated!")
-        elif state == "emojis":
-            db["settings"]["emojis"] = text.split(','); main_bot.send_message(uid, "✅ Emojis updated!")
-        elif state == "chlink":
-            db["links"]["channel"] = text; main_bot.send_message(uid, "✅ Channel Link updated!")
-        elif state == "chatlink":
-            db["links"]["chat"] = text; main_bot.send_message(uid, "✅ Chat Link updated!")
-        elif state == "ytlink":
-            db["links"]["youtube"] = text; main_bot.send_message(uid, "✅ YouTube Link updated!")
-        elif state == "videolink":
-            db["links"]["tutorial"] = text; main_bot.send_message(uid, "✅ Tutorial Video Link updated!")
-        elif state == "delay":
-            min_d, max_d = map(float, text.split())
-            db["settings"]["min_delay"], db["settings"]["max_delay"] = min_d, max_d
-            main_bot.send_message(uid, "✅ Delay updated!")
-            
-        elif state == "broadcast":
-            main_bot.send_message(uid, "⏳ Broadcasting started...")
-            sent, failed = 0, 0
-            for user in list(db["users"].keys()):
-                try:
-                    main_bot.copy_message(user, message.chat.id, message.message_id)
-                    sent += 1
-                except: failed += 1
-            main_bot.send_message(uid, f"✅ Broadcast Done!\nSuccess: {sent}\nFailed: {failed}")
-
-        save_data(db)
-        log_activity(f"Admin {uid} updated {state}")
-    except Exception as e:
-        main_bot.send_message(uid, f"❌ Error processing input.\nMake sure you sent the correct format.")
-    
-    admin_states[uid] = None
-
-# ================= RUN SERVER =================
-if __name__ == "__main__":
-    keep_alive()
-    print("🚀 Premium Mega Bot is Running...")
-    main_bot.infinity_polling(timeout=20, long_polling_timeout=10)
+                return main_bot.send_message(uid, f"❌ **Error:** Cannot add this channel. Make sure the bot is
