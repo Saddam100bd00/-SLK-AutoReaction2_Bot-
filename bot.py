@@ -1,11 +1,11 @@
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+import os
 import time
 import random
 import threading
-import queue
 import json
-import os
+from datetime import datetime
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReactionTypeEmoji
 from keep_alive import keep_alive
 
 # ================= কনফিগারেশন =================
@@ -39,7 +39,7 @@ REACTION_BOTS_DATA = [
 
 main_bot = telebot.TeleBot(MAIN_BOT_TOKEN)
 
-# 409 Conflict Fix
+# Conflict Fix & Setup React Clients
 react_clients = []
 for bot in REACTION_BOTS_DATA:
     if bot['token'] == MAIN_BOT_TOKEN:
@@ -47,7 +47,7 @@ for bot in REACTION_BOTS_DATA:
     else:
         react_clients.append({"client": telebot.TeleBot(bot['token']), "user": bot['user']})
 
-ALL_CONTENT_TYPES = ['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker', 'video_note', 'location', 'contact']
+ALL_CONTENT_TYPES = ['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker', 'location', 'contact', 'poll', 'dice']
 
 # ================= DATABASE & CACHE =================
 DB_FILE = 'database.json'
@@ -123,7 +123,7 @@ def log_activity(msg):
 def is_admin(user_id):
     return user_id in db["admins"] or user_id == OWNER_ID
 
-# ================= ADVANCED FAST REACTION ENGINE WITH EXACT ERROR LOGGING =================
+# ================= ADVANCED FAST REACTION ENGINE =================
 processed_messages = set()
 
 def process_reactions(chat_id, message_id):
@@ -143,16 +143,14 @@ def process_reactions(chat_id, message_id):
         
         try:
             chosen_emoji = random.choice(emojis)
-            client.set_message_reaction(chat_id, message_id, [telebot.types.ReactionTypeEmoji(chosen_emoji)], is_big=False)
+            # Latest pyTelegramBotAPI Syntax for Reactions
+            client.set_message_reaction(chat_id, message_id, [ReactionTypeEmoji(chosen_emoji)], is_big=False)
             db["stats"]["success"] += 1
-        except telebot.apihelper.ApiTelegramException as e:
-            if "Too Many Requests" in str(e): 
-                time.sleep(5)
-            error_desc = e.result_json.get('description', str(e)) if hasattr(e, 'result_json') else str(e)
-            log_activity(f"❌ {bot_uname}: {error_desc}")
-            db["stats"]["failed"] += 1
         except Exception as ex:
-            log_activity(f"❌ {bot_uname}: {str(ex)}")
+            error_msg = str(ex)
+            if "Too Many Requests" in error_msg: 
+                time.sleep(5)
+            log_activity(f"❌ {bot_uname}: {error_msg[:30]}")
             db["stats"]["failed"] += 1
             
         db["stats"]["total_reacs"] += 1
@@ -164,16 +162,23 @@ def trigger_reactions(message):
     if msg_id not in processed_messages:
         processed_messages.add(msg_id)
         if len(processed_messages) > 5000: processed_messages.clear()
+        
         db["stats"]["messages_processed"] += 1
         save_data(db)
+        
+        # Dedicated thread for every message (Fast & Non-blocking)
         threading.Thread(target=process_reactions, args=(message.chat.id, message.message_id), daemon=True).start()
 
+# ⚠️ Channel Handler (Fixed Priority)
 @main_bot.channel_post_handler(content_types=ALL_CONTENT_TYPES)
 def handle_channel_post(message):
+    log_activity("📩 Channel Post Detected!")
     trigger_reactions(message)
 
+# ⚠️ Group Handler
 @main_bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=ALL_CONTENT_TYPES)
 def handle_group_message(message):
+    log_activity("📩 Group Message Detected!")
     trigger_reactions(message)
 
 # ================= FSUB (Force Join) LOGIC =================
@@ -186,7 +191,7 @@ def check_fsub(user_id):
             stat = main_bot.get_chat_member(chat_id, user_id).status
             if stat in ['left', 'kicked']:
                 not_joined.append(ch)
-        except Exception as e:
+        except Exception:
             not_joined.append(ch)
     return len(not_joined) == 0, not_joined
 
@@ -243,7 +248,7 @@ def send_welcome(chat_id, name, user_id):
             main_bot.send_photo(chat_id, photo=photo_id, caption=text, reply_markup=markup, parse_mode="Markdown")
         else:
             main_bot.send_photo(chat_id, photo="https://i.imgur.com/7bQeXoF.png", caption=text, reply_markup=markup, parse_mode="Markdown")
-    except Exception as e:
+    except Exception:
         main_bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
 
 # ================= START COMMAND =================
@@ -288,7 +293,7 @@ def admin_dashboard_menu():
     )
     return m
 
-# ================= CALLBACK HANDLERS (SMOOTH UI) =================
+# ================= CALLBACK HANDLERS =================
 @main_bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     uid = call.from_user.id
@@ -310,12 +315,10 @@ def callback_handler(call):
         text = f"🤖 **{t} 𝗥𝗲𝗮𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁𝘀**\n━━━━━━━━━━━━━━━━━━━━\n✅ Add all bots to your {t} and make them Admin 🔰\n\n"
         markup = InlineKeyboardMarkup(row_width=4)
         buttons = []
-        
-        # ১ থেকে ২০ পর্যন্ত সিরিয়াল জেনারেট করার লজিক (উইথআউট আন্ডারস্কোর বাগ)
         for i in range(1, 21):
             num_suffix = "" if i == 1 else str(i)
             bot_username = f"slk_autoreaction{num_suffix}_Bot"
-            safe_username = bot_username.replace('_', '\\_') # আন্ডারস্কোর যেন ইটালিক না হয়ে যায়
+            safe_username = bot_username.replace('_', '\\_') 
             text += f"**{i}.** [@{safe_username}](https://t.me/{bot_username})\n"
             buttons.append(InlineKeyboardButton(f"➕ Add({i})", url=f"https://t.me/{bot_username}?{param}"))
             
@@ -457,7 +460,11 @@ def callback_handler(call):
         main_bot.send_message(call.message.chat.id, "📢 **Broadcast Mode**\nSend the message you want to broadcast (Text/Photo/Video).\nType `/cancel` to abort.", parse_mode="Markdown")
 
 # ================= SMART STATE HANDLER =================
-@main_bot.message_handler(func=lambda m: m.from_user.id in admin_states and admin_states[m.from_user.id] is not None, content_types=ALL_CONTENT_TYPES)
+def is_admin_inputting(m):
+    if not m.from_user: return False
+    return m.from_user.id in admin_states and admin_states[m.from_user.id] is not None
+
+@main_bot.message_handler(func=is_admin_inputting, content_types=ALL_CONTENT_TYPES)
 def handle_admin_input(message):
     uid = message.from_user.id
     state = admin_states[uid]
