@@ -9,7 +9,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReactionTy
 from keep_alive import keep_alive
 
 # ================= কনফিগারেশন =================
-MAIN_BOT_TOKEN = "8500215028:AAGi3CUatThSfpfBW1fbyJN80T99fTmc7KE" 
+MAIN_BOT_TOKEN = "8500215028:AAEh9WqwST3PQDWtgK7KfOCOSJpTAZvkmdI" 
 OWNER_ID = 8701368956
 OWNER_USERNAME = "Premium_buy_admin"
 
