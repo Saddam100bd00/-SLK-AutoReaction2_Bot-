@@ -11,7 +11,7 @@ from keep_alive import keep_alive
 # ================= কনফিগারেশন =================
 MAIN_BOT_TOKEN = "8500215028:AAEh9WqwST3PQDWtgK7KfOCOSJpTAZvkmdI" 
 OWNER_ID = 8701368956
-OWNER_USERNAME = "Premium_buy_admin"
+OWNER_USERNAME = "ItsSaddam9"
 
 # ২০টি বটের ডাটা
 REACTION_BOTS_DATA = [
