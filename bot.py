@@ -15,7 +15,7 @@ OWNER_USERNAME = "ItsSaddam9"
 
 # ২০টি বটের ডাটা
 REACTION_BOTS_DATA = [
-    {"user": "slk_autoreaction_Bot", "token": "8500215028:AAGi3CUatThSfpfBW1fbyJN80T99fTmc7KE"},
+    {"user": "slk_autoreaction_Bot", "token": "8715734407:AAGFJ-pcaYhYmpsGOdv1oq5leFBCDO4jd3U"},
     {"user": "slk_autoreaction2_Bot", "token": "8959375749:AAHb8TQNGvk17xS4TMxv7LM1g_d8a2XnYek"},
     {"user": "slk_autoreaction3_Bot", "token": "8584547169:AAEL1EA6I48cQWfHHzfnWP8IoVla95bswwo"},
     {"user": "slk_autoreaction4_Bot", "token": "8818511746:AAEEC0xRjXt0OTJszhOUyoo7D7uEa8mlAew"},
